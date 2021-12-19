@@ -84,7 +84,12 @@ public class MainActivity extends AppCompatActivity {
         button2.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                final String data = encodeImage(imageView.getDrawable());
+                String img64 = encodeImage(imageView.getDrawable());
+                final String data = "{" +
+                        "\"length\":" + img64.length() +
+                        "\"image\":\"" + img64 +"\"" +
+                        "}";
+                println("길이 : " + data.length());
 
                 new Thread(new Runnable() {
                     @Override
