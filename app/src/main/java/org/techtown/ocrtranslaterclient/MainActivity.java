@@ -1,11 +1,15 @@
 package org.techtown.ocrtranslaterclient;
 
 
+import static android.content.ContentValues.TAG;
+
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
 
 import android.content.ClipData;
+import android.content.ContentUris;
+import android.content.Context;
 import android.content.Intent;
 import android.database.Cursor;
 import android.graphics.Bitmap;
@@ -14,23 +18,35 @@ import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.media.audiofx.DynamicsProcessing;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
+import android.provider.DocumentsContract;
 import android.provider.MediaStore;
 import android.util.Base64;
+import android.util.Log;
 import android.view.View;
 import android.widget.Button;
 import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.nio.ByteBuffer;
 import java.nio.channels.SocketChannel;
 import java.nio.charset.Charset;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Iterator;
@@ -45,11 +61,13 @@ public class MainActivity extends AppCompatActivity {
     public SocketChannel socketChannel = null;
     private ImageView imageView;
     private TextView textView;
-    private Button button,button2;
+    private Button button,button2,button3;
     int PICK_IMAGE_MULTIPLE = 1;
     ArrayList<Drawable> images = new ArrayList<Drawable>();
     ArrayList<Uri> imagesUri = new ArrayList<Uri>();
+    ArrayList<Bitmap> imagesfile = new ArrayList<Bitmap>();
     int imageIndex;
+    Bitmap imgfile = null;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -60,6 +78,7 @@ public class MainActivity extends AppCompatActivity {
         textView = findViewById(R.id.textView);
         button = findViewById(R.id.button);
         button2 = findViewById(R.id.button2);
+        button3 = findViewById(R.id.button3);
 
         imageView.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -84,22 +103,25 @@ public class MainActivity extends AppCompatActivity {
         button2.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                String img64 = encodeImage(imageView.getDrawable());
-                final String data = "{" +
-                        "\"length\":" + img64.length() +
-                        "\"image\":\"" + img64 +"\"" +
-                        "}";
-                println("길이 : " + data.length());
-
+                imgfile = imagesfile.get(imageIndex);
                 new Thread(new Runnable() {
                     @Override
                     public void run() {
-                        send(data);
+                        sendFile(imgfile);
                     }
                 }).start();
             }
         });
+
+        button3.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                connectServer();
+            }
+        });
     }
+
+    private String getRealPathFromURI(Uri contentUri) { if (contentUri.getPath().startsWith("/storage")) { return contentUri.getPath(); } String id = DocumentsContract.getDocumentId(contentUri).split(":")[1]; String[] columns = { MediaStore.Files.FileColumns.DATA }; String selection = MediaStore.Files.FileColumns._ID + " = " + id; Cursor cursor = getContentResolver().query(MediaStore.Files.getContentUri("external"), columns, selection, null, null); try { int columnIndex = cursor.getColumnIndex(columns[0]); if (cursor.moveToFirst()) { return cursor.getString(columnIndex); } } finally { cursor.close(); } return null; }
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
@@ -117,6 +139,14 @@ public class MainActivity extends AppCompatActivity {
                     images.add(Drawable.createFromStream(
                             getContentResolver().openInputStream(uri),
                             null));
+                    Bitmap selPhoto = MediaStore.Images.Media.getBitmap( getContentResolver(), uri );
+                    imagesfile.add(selPhoto);
+
+//                realPath = RealPathUtil.getRealPathFromURI_API19(this, data.getData());
+
+                    Log.i(TAG, "onActivityResult: file path : " + selPhoto);
+
+//                    imagesfile.add(new File(getPath(uri)));
                 } else {
                     if (data.getClipData() != null) {
                         ClipData mClipData = data.getClipData();
@@ -131,7 +161,7 @@ public class MainActivity extends AppCompatActivity {
                             images.add(Drawable.createFromStream(
                                     getContentResolver().openInputStream(uri),
                                     null));
-
+//                            imagesfile.add(new File(getPath(uri)));
                         }
                         println( "Selected Images" + images.size());
                     }
@@ -142,6 +172,7 @@ public class MainActivity extends AppCompatActivity {
                 println( "You haven't picked Image");
             }
         } catch (Exception e) {
+            e.printStackTrace();
             println("Something went wrong");
         }
         super.onActivityResult(requestCode, resultCode, data);
@@ -170,6 +201,41 @@ public class MainActivity extends AppCompatActivity {
             }
         };
         sendingThread.start();
+    }
+
+    public void sendFile(Bitmap file){
+        if(socketChannel == null || !socketChannel.isConnected()){
+            connectServer();
+        }
+        Thread fileSendingThread = new Thread() {
+            @Override
+            public void run() {
+                ByteBuffer byteBuffer = null; // 바이트 버퍼를 초기화한다
+                try {
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                        println(file.toString());
+
+                        byteBuffer = ByteBuffer.allocate(file.getByteCount());
+                        file.copyPixelsToBuffer(byteBuffer);
+
+                        try {
+                            socketChannel.write(byteBuffer);
+                        } catch (Exception e) {
+                            println("송신 실패...");
+                            return;
+                        }
+                        println("송신 완료");
+                        System.out.println("송신 : 길이 " + file.getByteCount());
+                    } else {
+                        println("버전 오류");
+                    }
+                } catch (Exception e) {
+                    println("파일 오류");
+                    return;
+                }
+            }
+        };
+        fileSendingThread.start();
     }
 
     public void connectServer(){
